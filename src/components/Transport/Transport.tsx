@@ -7,13 +7,43 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { useGrooveboxStore } from '../../store/useGrooveboxStore';
+import type { Track } from '../../store/useGrooveboxStore';
 import { audioEngine } from '../../audio/AudioEngine';
 import { scheduler } from '../../audio/Scheduler';
 import { metronome } from '../../audio/Metronome';
 import { drumSampler } from '../../audio/DrumSampler';
+import { synthesizer } from '../../audio/Synthesizer';
 import type { DrumType } from '../../audio/DrumSampler';
 
 const DRUMS: DrumType[] = ['kick', 'snare', 'hihat', 'openhat'];
+
+// Check if a track should play on this global step based on its clock divider
+const shouldTrackPlayOnStep = (globalStep: number, track: Track): { shouldPlay: boolean; trackStep: number } => {
+  const divider = track.clockDivider;
+
+  if (divider === 1) {
+    // Normal speed - play every step
+    return { shouldPlay: true, trackStep: globalStep };
+  } else if (divider === 0.5) {
+    // Half speed - play every 2nd global step
+    if (globalStep % 2 === 0) {
+      return { shouldPlay: true, trackStep: Math.floor(globalStep / 2) };
+    }
+    return { shouldPlay: false, trackStep: 0 };
+  } else if (divider === 0.25) {
+    // Quarter speed - play every 4th global step
+    if (globalStep % 4 === 0) {
+      return { shouldPlay: true, trackStep: Math.floor(globalStep / 4) };
+    }
+    return { shouldPlay: false, trackStep: 0 };
+  } else if (divider === 2) {
+    // Double speed - play twice per global step (handled differently)
+    // For double speed, we play the track step and the next one
+    return { shouldPlay: true, trackStep: (globalStep * 2) % 16 };
+  }
+
+  return { shouldPlay: true, trackStep: globalStep };
+};
 
 export function Transport() {
   const {
@@ -26,7 +56,7 @@ export function Transport() {
     swing,
     setSwing,
     setCurrentStep,
-    patterns,
+    tracks,
     patternLength,
     metronomeEnabled,
     setMetronomeEnabled,
@@ -37,11 +67,11 @@ export function Transport() {
 
   const tapTimeoutRef = useRef<number | null>(null);
 
-  // Store patterns in a ref so the scheduler callback always has the latest
-  const patternsRef = useRef(patterns);
+  // Store tracks in a ref so the scheduler callback always has the latest
+  const tracksRef = useRef(tracks);
   useEffect(() => {
-    patternsRef.current = patterns;
-  }, [patterns]);
+    tracksRef.current = tracks;
+  }, [tracks]);
 
   const patternLengthRef = useRef(patternLength);
   useEffect(() => {
@@ -57,6 +87,21 @@ export function Transport() {
   const handleInitAudio = useCallback(async () => {
     if (!isAudioInitialized) {
       await audioEngine.init();
+
+      // Initialize track audio nodes with their volume/pan settings
+      const currentTracks = tracksRef.current;
+      const hasSolo = currentTracks.some((t) => t.solo);
+
+      for (const track of currentTracks) {
+        // Create the track nodes
+        audioEngine.getTrackNodes(track.id);
+
+        // Set initial volume (accounting for mute/solo)
+        const isMuted = track.mute || (hasSolo && !track.solo);
+        audioEngine.setTrackVolume(track.id, isMuted ? 0 : track.volume);
+        audioEngine.setTrackPan(track.id, track.pan);
+      }
+
       setAudioInitialized(true);
     }
   }, [isAudioInitialized, setAudioInitialized]);
@@ -64,15 +109,87 @@ export function Transport() {
   // Set up scheduler callbacks
   useEffect(() => {
     scheduler.setOnStep((time, step) => {
-      const actualStep = step % patternLengthRef.current;
-      setCurrentStep(actualStep);
+      const globalStep = step % patternLengthRef.current;
+      setCurrentStep(globalStep);
 
-      // Play drums for this step
-      const currentPatterns = patternsRef.current;
-      for (const drum of DRUMS) {
-        const stepData = currentPatterns[drum][actualStep];
-        if (stepData?.active) {
-          drumSampler.play(drum, time, stepData.velocity);
+      // Get current tracks state
+      const currentTracks = tracksRef.current;
+      const hasSolo = currentTracks.some((t) => t.solo);
+
+      // Play each track
+      for (const track of currentTracks) {
+        // Skip muted tracks or non-soloed tracks when solo is active
+        const isMuted = track.mute || (hasSolo && !track.solo);
+        if (isMuted) continue;
+
+        // Check clock divider to see if this track should play
+        const { shouldPlay, trackStep } = shouldTrackPlayOnStep(globalStep, track);
+        if (!shouldPlay) continue;
+
+        // Ensure trackStep is within pattern bounds
+        const actualStep = trackStep % patternLengthRef.current;
+
+        // Get track's output node for proper routing
+        const trackOutput = audioEngine.getTrackOutput(track.id);
+
+        if (track.type === 'drum') {
+          // Play drums for this step
+          for (const drum of DRUMS) {
+            const stepData = track.patterns[drum]?.[actualStep];
+            if (stepData?.active) {
+              drumSampler.play(drum, time, stepData.velocity, trackOutput);
+            }
+          }
+        } else if (track.type === 'tone') {
+          // Play synth for this step
+          const stepData = track.synthPattern?.[actualStep];
+          if (stepData?.active) {
+            synthesizer.play(
+              stepData.note,
+              time,
+              stepData.velocity,
+              {
+                oscillatorType: track.oscillatorType,
+                filterCutoff: track.filterCutoff,
+                filterResonance: track.filterResonance,
+                attack: track.attack,
+                release: track.release,
+              },
+              trackOutput
+            );
+          }
+        }
+
+        // For double speed (2x), also play the next step
+        if (track.clockDivider === 2) {
+          const nextStep = (trackStep + 1) % patternLengthRef.current;
+          const halfStepDuration = (60 / scheduler.getBpm()) / 8; // Half a 16th note
+
+          if (track.type === 'drum') {
+            for (const drum of DRUMS) {
+              const stepData = track.patterns[drum]?.[nextStep];
+              if (stepData?.active) {
+                drumSampler.play(drum, time + halfStepDuration, stepData.velocity, trackOutput);
+              }
+            }
+          } else if (track.type === 'tone') {
+            const stepData = track.synthPattern?.[nextStep];
+            if (stepData?.active) {
+              synthesizer.play(
+                stepData.note,
+                time + halfStepDuration,
+                stepData.velocity,
+                {
+                  oscillatorType: track.oscillatorType,
+                  filterCutoff: track.filterCutoff,
+                  filterResonance: track.filterResonance,
+                  attack: track.attack,
+                  release: track.release,
+                },
+                trackOutput
+              );
+            }
+          }
         }
       }
     });

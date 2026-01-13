@@ -23,24 +23,30 @@ class DrumSampler {
    * @param type - Which drum to play
    * @param time - When to play (Web Audio time)
    * @param velocity - How loud (0-1)
+   * @param destination - Optional output node (defaults to master gain)
    */
-  play(type: DrumType, time: number, velocity: number = 1): void {
+  play(
+    type: DrumType,
+    time: number,
+    velocity: number = 1,
+    destination?: AudioNode
+  ): void {
     const ctx = audioEngine.getContext();
-    const masterGain = audioEngine.getMasterGain();
+    const output = destination ?? audioEngine.getMasterGain();
     const vel = Math.max(0, Math.min(1, velocity));
 
     switch (type) {
       case 'kick':
-        this.playKick(ctx, masterGain, time, vel);
+        this.playKick(ctx, output, time, vel);
         break;
       case 'snare':
-        this.playSnare(ctx, masterGain, time, vel);
+        this.playSnare(ctx, output, time, vel);
         break;
       case 'hihat':
-        this.playHihat(ctx, masterGain, time, vel, false);
+        this.playHihat(ctx, output, time, vel, false);
         break;
       case 'openhat':
-        this.playHihat(ctx, masterGain, time, vel, true);
+        this.playHihat(ctx, output, time, vel, true);
         break;
     }
   }

@@ -1,4 +1,5 @@
 import { Transport } from './components/Transport';
+import { Mixer } from './components/Mixer';
 import { StepSequencer } from './components/Sequencer';
 
 function App() {
@@ -8,24 +9,50 @@ function App() {
         {/* Header */}
         <header className="text-center mb-6">
           <h1 className="text-2xl font-bold text-white">Web Groovebox</h1>
-          <p className="text-zinc-500 text-sm">Phase 3: Swing & Groove</p>
+          <p className="text-zinc-500 text-sm">Phase 4+5: Multi-Track + Synth</p>
         </header>
 
         {/* Transport */}
         <Transport />
+
+        {/* Mixer */}
+        <Mixer />
 
         {/* Step Sequencer */}
         <StepSequencer />
 
         {/* Learning Note */}
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-4 text-sm text-zinc-400">
-          <h3 className="font-semibold text-zinc-300 mb-2">Music Concept: Swing & Groove</h3>
-          <p>
-            <strong>Swing</strong> delays every other 16th note, creating a "bounce" or "shuffle" feel.
-            At 0% swing, timing is perfectly straight (robotic). At ~50%, you get a triplet feel.
-            Try loading "Classic House" and adjusting swing from 0% to 50% - hear how the hi-hats
-            go from mechanical to groovy. Techno often uses less swing (0-20%), while house uses more (30-50%).
-          </p>
+          <h3 className="font-semibold text-zinc-300 mb-2">Music Concepts</h3>
+
+          <div className="space-y-3">
+            <div>
+              <h4 className="text-zinc-300 font-medium">Mixing</h4>
+              <ul className="list-disc list-inside space-y-0.5 mt-1">
+                <li><strong>Volume</strong> - Balance so nothing drowns out others</li>
+                <li><strong>Panning</strong> - Position in stereo (kick centered, synths wide)</li>
+                <li><strong>Mute/Solo</strong> - Focus on specific parts</li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-zinc-300 font-medium">Clock Divider</h4>
+              <p className="mt-1">
+                Each track can run at different speeds: <strong>1/4x</strong> (quarter speed),
+                <strong> 1/2x</strong> (half), <strong>1x</strong> (normal), <strong>2x</strong> (double).
+                Try putting drums at 1x and bass at 1/2x for a half-time feel!
+              </p>
+            </div>
+
+            <div>
+              <h4 className="text-zinc-300 font-medium">Synthesis</h4>
+              <p className="mt-1">
+                Synth tracks create sound from <strong>oscillators</strong> (raw waveforms) shaped by
+                <strong> filters</strong> (remove frequencies) and <strong>envelopes</strong> (volume over time).
+                Click steps to add notes, use +/- to change pitch.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
