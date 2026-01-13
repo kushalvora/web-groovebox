@@ -2,6 +2,7 @@
  * Groovebox Store - Central state management using Zustand
  *
  * Manages transport state (play/stop, BPM), patterns, and all groovebox state.
+ * User patterns are persisted to localStorage.
  */
 
 import { create } from 'zustand';
@@ -23,6 +24,7 @@ export type DrumPatterns = Record<DrumType, DrumPattern>;
 export interface PatternPreset {
   name: string;
   patterns: DrumPatterns;
+  isUserPattern?: boolean;
 }
 
 // Create an empty pattern for a single track
@@ -37,8 +39,8 @@ const createEmptyPatterns = (length: number = 16): DrumPatterns => ({
   openhat: createEmptyPattern(length),
 });
 
-// Preset patterns
-export const PATTERN_PRESETS: PatternPreset[] = [
+// Built-in preset patterns
+const BUILTIN_PRESETS: PatternPreset[] = [
   {
     name: 'Empty',
     patterns: createEmptyPatterns(),
@@ -47,15 +49,15 @@ export const PATTERN_PRESETS: PatternPreset[] = [
     name: 'Four on the Floor',
     patterns: {
       kick: Array.from({ length: 16 }, (_, i) => ({
-        active: i % 4 === 0, // Kick on 1, 5, 9, 13
+        active: i % 4 === 0,
         velocity: 1,
       })),
       snare: Array.from({ length: 16 }, (_, i) => ({
-        active: i === 4 || i === 12, // Snare on 5 and 13 (beats 2 and 4)
+        active: i === 4 || i === 12,
         velocity: 0.9,
       })),
       hihat: Array.from({ length: 16 }, (_, i) => ({
-        active: i % 2 === 0, // Hi-hat on every 8th note
+        active: i % 2 === 0,
         velocity: i % 4 === 0 ? 0.9 : 0.6,
       })),
       openhat: createEmptyPattern(),
@@ -73,11 +75,11 @@ export const PATTERN_PRESETS: PatternPreset[] = [
         velocity: 0.85,
       })),
       hihat: Array.from({ length: 16 }, (_, i) => ({
-        active: true, // Hi-hat on every 16th
+        active: true,
         velocity: i % 2 === 0 ? 0.7 : 0.4,
       })),
       openhat: Array.from({ length: 16 }, (_, i) => ({
-        active: i === 2 || i === 6 || i === 10 || i === 14, // Offbeat open hats
+        active: i === 2 || i === 6 || i === 10 || i === 14,
         velocity: 0.5,
       })),
     },
@@ -86,7 +88,7 @@ export const PATTERN_PRESETS: PatternPreset[] = [
     name: 'Driving Techno',
     patterns: {
       kick: Array.from({ length: 16 }, (_, i) => ({
-        active: i % 4 === 0 || i === 14, // Four on floor + pickup
+        active: i % 4 === 0 || i === 14,
         velocity: i === 14 ? 0.7 : 1,
       })),
       snare: Array.from({ length: 16 }, (_, i) => ({
@@ -94,13 +96,44 @@ export const PATTERN_PRESETS: PatternPreset[] = [
         velocity: 0.8,
       })),
       hihat: Array.from({ length: 16 }, (_, i) => ({
-        active: i % 2 === 1, // Offbeat hi-hats
+        active: i % 2 === 1,
         velocity: 0.6,
       })),
       openhat: createEmptyPattern(),
     },
   },
 ];
+
+// localStorage key for user patterns
+const STORAGE_KEY = 'groovebox-user-patterns';
+
+// Load user patterns from localStorage
+const loadUserPatterns = (): PatternPreset[] => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const patterns = JSON.parse(stored) as PatternPreset[];
+      return patterns.map((p) => ({ ...p, isUserPattern: true }));
+    }
+  } catch (e) {
+    console.warn('Failed to load user patterns:', e);
+  }
+  return [];
+};
+
+// Save user patterns to localStorage
+const saveUserPatterns = (patterns: PatternPreset[]): void => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(patterns));
+  } catch (e) {
+    console.warn('Failed to save user patterns:', e);
+  }
+};
+
+// Get all presets (built-in + user)
+export const getPatternPresets = (userPatterns: PatternPreset[]): PatternPreset[] => {
+  return [...BUILTIN_PRESETS, ...userPatterns];
+};
 
 interface GrooveboxState {
   // Audio initialization
@@ -113,6 +146,9 @@ interface GrooveboxState {
 
   bpm: number;
   setBpm: (bpm: number) => void;
+
+  swing: number;
+  setSwing: (swing: number) => void;
 
   currentStep: number;
   setCurrentStep: (step: number) => void;
@@ -127,6 +163,11 @@ interface GrooveboxState {
   loadPreset: (preset: PatternPreset) => void;
   clearPattern: () => void;
 
+  // User patterns
+  userPatterns: PatternPreset[];
+  savePattern: (name: string) => void;
+  deleteUserPattern: (name: string) => void;
+
   // Metronome
   metronomeEnabled: boolean;
   setMetronomeEnabled: (enabled: boolean) => void;
@@ -137,7 +178,7 @@ interface GrooveboxState {
   clearTapTimes: () => void;
 }
 
-export const useGrooveboxStore = create<GrooveboxState>((set) => ({
+export const useGrooveboxStore = create<GrooveboxState>((set, get) => ({
   // Audio initialization
   isAudioInitialized: false,
   setAudioInitialized: (initialized) => set({ isAudioInitialized: initialized }),
@@ -148,6 +189,9 @@ export const useGrooveboxStore = create<GrooveboxState>((set) => ({
 
   bpm: 120,
   setBpm: (bpm) => set({ bpm: Math.max(20, Math.min(300, bpm)) }),
+
+  swing: 0,
+  setSwing: (swing) => set({ swing: Math.max(0, Math.min(100, swing)) }),
 
   currentStep: 0,
   setCurrentStep: (step) => set({ currentStep: step }),
@@ -180,10 +224,47 @@ export const useGrooveboxStore = create<GrooveboxState>((set) => ({
 
   loadPreset: (preset) =>
     set({
-      patterns: JSON.parse(JSON.stringify(preset.patterns)), // Deep clone
+      patterns: JSON.parse(JSON.stringify(preset.patterns)),
     }),
 
   clearPattern: () => set({ patterns: createEmptyPatterns() }),
+
+  // User patterns
+  userPatterns: loadUserPatterns(),
+
+  savePattern: (name) => {
+    const { patterns, userPatterns } = get();
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    // Check if name already exists
+    const existingIndex = userPatterns.findIndex((p) => p.name === trimmedName);
+    const newPattern: PatternPreset = {
+      name: trimmedName,
+      patterns: JSON.parse(JSON.stringify(patterns)),
+      isUserPattern: true,
+    };
+
+    let newUserPatterns: PatternPreset[];
+    if (existingIndex >= 0) {
+      // Update existing
+      newUserPatterns = [...userPatterns];
+      newUserPatterns[existingIndex] = newPattern;
+    } else {
+      // Add new
+      newUserPatterns = [...userPatterns, newPattern];
+    }
+
+    saveUserPatterns(newUserPatterns);
+    set({ userPatterns: newUserPatterns });
+  },
+
+  deleteUserPattern: (name) => {
+    const { userPatterns } = get();
+    const newUserPatterns = userPatterns.filter((p) => p.name !== name);
+    saveUserPatterns(newUserPatterns);
+    set({ userPatterns: newUserPatterns });
+  },
 
   // Metronome
   metronomeEnabled: false,

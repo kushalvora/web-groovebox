@@ -1,8 +1,8 @@
 /**
- * Transport Component - Play/Stop, BPM control, and Tap Tempo
+ * Transport Component - Play/Stop, BPM, Swing, and Tap Tempo
  *
  * The transport is the "master control" of the groovebox.
- * It manages playback state and tempo.
+ * It manages playback state, tempo, and groove feel.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -23,6 +23,8 @@ export function Transport() {
     setIsPlaying,
     bpm,
     setBpm,
+    swing,
+    setSwing,
     setCurrentStep,
     patterns,
     patternLength,
@@ -87,6 +89,11 @@ export function Transport() {
     scheduler.setBpm(bpm);
   }, [bpm]);
 
+  // Sync swing with scheduler
+  useEffect(() => {
+    scheduler.setSwing(swing);
+  }, [swing]);
+
   // Handle play/stop
   const handlePlayStop = useCallback(async () => {
     await handleInitAudio();
@@ -107,6 +114,14 @@ export function Transport() {
       setBpm(parseInt(e.target.value, 10));
     },
     [setBpm]
+  );
+
+  // Handle swing change
+  const handleSwingChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setSwing(parseInt(e.target.value, 10));
+    },
+    [setSwing]
   );
 
   // Handle tap tempo
@@ -143,8 +158,8 @@ export function Transport() {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 w-full">
-      {/* Transport Controls */}
-      <div className="flex items-center gap-6">
+      {/* Transport Controls - Row 1 */}
+      <div className="flex items-center gap-6 mb-4">
         {/* Play/Stop Button */}
         <button
           onClick={handlePlayStop}
@@ -179,6 +194,22 @@ export function Transport() {
           />
         </div>
 
+        {/* Swing Control */}
+        <div className="w-32 flex-shrink-0">
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="text-xl font-mono font-bold text-white">{swing}%</span>
+            <span className="text-zinc-400 text-sm">Swing</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="75"
+            value={swing}
+            onChange={handleSwingChange}
+            className="w-full h-2 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+          />
+        </div>
+
         {/* Tap Tempo Button */}
         <button
           onClick={handleTapTempo}
@@ -202,7 +233,7 @@ export function Transport() {
 
       {/* Audio Status */}
       {!isAudioInitialized && (
-        <p className="text-center text-zinc-500 text-xs mt-3">
+        <p className="text-center text-zinc-500 text-xs">
           Click Play to initialize audio
         </p>
       )}

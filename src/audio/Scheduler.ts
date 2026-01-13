@@ -10,6 +10,11 @@
  * 1. A timer runs every ~25ms checking what's coming up
  * 2. We schedule any events in the next ~100ms
  * 3. Web Audio plays them at exactly the right time
+ *
+ * Swing:
+ * Swing delays the "offbeat" 16th notes (steps 1, 3, 5, 7, 9, 11, 13, 15).
+ * At 0% swing, timing is straight. At 50%, it's a triplet feel.
+ * At 67%, it's a heavy shuffle. This is what makes house music "bounce".
  */
 
 import { audioEngine } from './AudioEngine';
@@ -18,6 +23,7 @@ export type SchedulerCallback = (beatTime: number, beatNumber: number) => void;
 
 class Scheduler {
   private bpm = 120;
+  private swing = 0; // 0-100, where 0 is straight and 50+ adds shuffle
   private isPlaying = false;
   private currentBeat = 0;
   private nextBeatTime = 0;
@@ -47,6 +53,20 @@ class Scheduler {
   }
 
   /**
+   * Set swing amount (0-100)
+   * 0 = straight timing
+   * 50 = triplet feel (the "e" of "1 e & a" is delayed to triplet position)
+   * 67+ = heavy shuffle
+   */
+  setSwing(swing: number): void {
+    this.swing = Math.max(0, Math.min(100, swing));
+  }
+
+  getSwing(): number {
+    return this.swing;
+  }
+
+  /**
    * Register a callback for each beat (quarter note)
    */
   setOnBeat(callback: SchedulerCallback): void {
@@ -72,6 +92,25 @@ class Scheduler {
    */
   private getSecondsPerStep(): number {
     return this.getSecondsPerBeat() / this.stepsPerBeat;
+  }
+
+  /**
+   * Calculate swing delay for a given step
+   * Odd steps (1, 3, 5, 7...) get delayed based on swing amount
+   *
+   * Swing creates a "long-short" pattern instead of equal 16th notes.
+   * At 66% swing, you get triplet feel (the classic house bounce).
+   */
+  private getSwingDelay(step: number): number {
+    // Only delay odd steps (the offbeats)
+    if (step % 2 === 0) return 0;
+
+    // Convert swing percentage to delay
+    // At 66% swing, delay is ~33% of step duration (triplet feel)
+    // This makes the offbeat land on the triplet position
+    const stepDuration = this.getSecondsPerStep();
+    const maxDelay = stepDuration * 0.66; // Up to 66% of step duration
+    return (this.swing / 100) * maxDelay;
   }
 
   /**
@@ -127,7 +166,11 @@ class Scheduler {
 
     // Schedule all steps that fall within our look-ahead window
     while (this.nextBeatTime < currentTime + this.scheduleAheadTime) {
-      this.scheduleStep(this.nextBeatTime, this.currentStep);
+      // Apply swing delay to the scheduled time
+      const swingDelay = this.getSwingDelay(this.currentStep);
+      const scheduledTime = this.nextBeatTime + swingDelay;
+
+      this.scheduleStep(scheduledTime, this.currentStep);
       this.advanceStep();
     }
 
