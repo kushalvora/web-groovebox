@@ -40,7 +40,10 @@ export type ClockDivider = 0.25 | 0.5 | 1 | 2;
 export type OscillatorType = 'sine' | 'square' | 'sawtooth' | 'triangle';
 
 // Synth preset types
-export type SynthPreset = 'bass' | 'lead' | 'pad' | 'stab';
+export type SynthPreset = 'bass' | 'sub-bass' | 'acid' | 'lead' | 'pluck' | 'pad' | 'stab' | 'organ' | 'bells';
+
+// Valid pattern lengths
+export type PatternLength = 8 | 16 | 32 | 64;
 
 // Track definition for multi-track mixer
 export interface Track {
@@ -54,6 +57,7 @@ export interface Track {
   volume: number; // 0-1
   pan: number; // -1 (left) to 1 (right)
   clockDivider: ClockDivider; // 0.25 = quarter speed, 0.5 = half, 1 = normal, 2 = double
+  patternLength: PatternLength; // Steps in this track's pattern (8, 16, 32, 64)
   // Synth-specific settings
   synthPreset: SynthPreset;
   oscillatorType: OscillatorType;
@@ -61,6 +65,13 @@ export interface Track {
   filterResonance: number; // 0-1
   attack: number; // 0-1 (maps to 0.001-2 seconds)
   release: number; // 0-1 (maps to 0.01-3 seconds)
+  // Second oscillator (for thicker sound)
+  osc2Enabled: boolean;
+  osc2Type: OscillatorType;
+  osc2Detune: number; // -100 to +100 cents
+  osc2Volume: number; // 0-1 mix level
+  // Legato mode (tie consecutive notes)
+  legato: boolean;
 }
 
 // Preset pattern definition
@@ -171,6 +182,7 @@ const createTrack = (name: string, type: TrackType = 'drum', synthPreset: SynthP
   volume: 0.8,
   pan: 0,
   clockDivider: 1,
+  patternLength: 16,
   // Synth settings
   synthPreset,
   oscillatorType: synthPreset === 'bass' ? 'sawtooth' : 'square',
@@ -178,6 +190,13 @@ const createTrack = (name: string, type: TrackType = 'drum', synthPreset: SynthP
   filterResonance: 0.2,
   attack: synthPreset === 'pad' ? 0.4 : 0.01,
   release: synthPreset === 'pad' ? 0.6 : 0.3,
+  // Second oscillator (off by default)
+  osc2Enabled: false,
+  osc2Type: 'sine',
+  osc2Detune: 7, // Slight detune for chorus effect
+  osc2Volume: 0.5,
+  // Legato (off by default - trigger mode)
+  legato: false,
 });
 
 // Create default 4 tracks (like MC-101) - 2 drums, 2 synths
@@ -223,12 +242,19 @@ const migrateTrack = (track: Partial<Track>): Track => ({
   volume: track.volume ?? 0.8,
   pan: track.pan ?? 0,
   clockDivider: track.clockDivider ?? 1,
+  patternLength: track.patternLength ?? 16,
   synthPreset: track.synthPreset ?? 'bass',
   oscillatorType: track.oscillatorType ?? 'sawtooth',
   filterCutoff: track.filterCutoff ?? 0.5,
   filterResonance: track.filterResonance ?? 0.2,
   attack: track.attack ?? 0.01,
   release: track.release ?? 0.3,
+  // New properties - add defaults for existing tracks
+  osc2Enabled: track.osc2Enabled ?? false,
+  osc2Type: track.osc2Type ?? 'sine',
+  osc2Detune: track.osc2Detune ?? 7,
+  osc2Volume: track.osc2Volume ?? 0.5,
+  legato: track.legato ?? false,
 });
 
 // Load tracks from localStorage
@@ -288,6 +314,7 @@ interface GrooveboxState {
   setTrackPan: (id: string, pan: number) => void;
   setTrackName: (id: string, name: string) => void;
   setTrackClockDivider: (id: string, divider: ClockDivider) => void;
+  setTrackPatternLength: (id: string, length: PatternLength) => void;
   setTrackType: (id: string, type: TrackType) => void;
   getSelectedTrack: () => Track | undefined;
 
@@ -313,6 +340,13 @@ interface GrooveboxState {
   setFilterResonance: (resonance: number) => void;
   setAttack: (attack: number) => void;
   setRelease: (release: number) => void;
+  // Second oscillator
+  setOsc2Enabled: (enabled: boolean) => void;
+  setOsc2Type: (type: OscillatorType) => void;
+  setOsc2Detune: (detune: number) => void;
+  setOsc2Volume: (volume: number) => void;
+  // Legato mode
+  setLegato: (legato: boolean) => void;
 
   // User patterns
   userPatterns: PatternPreset[];
@@ -406,6 +440,56 @@ export const useGrooveboxStore = create<GrooveboxState>((set, get) => ({
       const tracks = state.tracks.map((t) =>
         t.id === id ? { ...t, clockDivider: divider } : t
       );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  setTrackPatternLength: (id, length) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) => {
+        if (t.id !== id) return t;
+        // Resize patterns if needed
+        const currentLength = t.patternLength;
+        if (length === currentLength) return t;
+
+        // Resize drum patterns
+        const resizedPatterns: DrumPatterns = {} as DrumPatterns;
+        for (const drum of Object.keys(t.patterns) as DrumType[]) {
+          const oldPattern = t.patterns[drum];
+          if (length > currentLength) {
+            // Extend: pad with empty steps
+            resizedPatterns[drum] = [
+              ...oldPattern,
+              ...Array.from({ length: length - currentLength }, () => ({ active: false, velocity: 0.8 })),
+            ];
+          } else {
+            // Truncate
+            resizedPatterns[drum] = oldPattern.slice(0, length);
+          }
+        }
+
+        // Resize synth pattern
+        let resizedSynthPattern: SynthPattern;
+        if (length > currentLength) {
+          resizedSynthPattern = [
+            ...t.synthPattern,
+            ...Array.from({ length: length - currentLength }, () => ({
+              active: false,
+              velocity: 0.8,
+              note: t.synthPattern[0]?.note ?? 48,
+            })),
+          ];
+        } else {
+          resizedSynthPattern = t.synthPattern.slice(0, length);
+        }
+
+        return {
+          ...t,
+          patternLength: length,
+          patterns: resizedPatterns,
+          synthPattern: resizedSynthPattern,
+        };
+      });
       saveTracks(tracks);
       return { tracks };
     }),
@@ -547,11 +631,16 @@ export const useGrooveboxStore = create<GrooveboxState>((set, get) => ({
       const tracks = state.tracks.map((t) => {
         if (t.id !== state.selectedTrackId) return t;
         // Apply preset defaults
-        const defaults = {
-          bass: { oscillatorType: 'sawtooth' as const, filterCutoff: 0.3, attack: 0.01, release: 0.3 },
-          lead: { oscillatorType: 'square' as const, filterCutoff: 0.7, attack: 0.01, release: 0.2 },
-          pad: { oscillatorType: 'sawtooth' as const, filterCutoff: 0.5, attack: 0.4, release: 0.6 },
-          stab: { oscillatorType: 'square' as const, filterCutoff: 0.8, attack: 0.001, release: 0.15 },
+        const defaults: Record<SynthPreset, Partial<Track>> = {
+          bass: { oscillatorType: 'sawtooth' as const, filterCutoff: 0.3, filterResonance: 0.3, attack: 0.01, release: 0.3 },
+          'sub-bass': { oscillatorType: 'sine' as const, filterCutoff: 0.15, filterResonance: 0.1, attack: 0.05, release: 0.4 },
+          acid: { oscillatorType: 'sawtooth' as const, filterCutoff: 0.4, filterResonance: 0.7, attack: 0.001, release: 0.1 },
+          lead: { oscillatorType: 'square' as const, filterCutoff: 0.7, filterResonance: 0.2, attack: 0.01, release: 0.2 },
+          pluck: { oscillatorType: 'triangle' as const, filterCutoff: 0.9, filterResonance: 0.2, attack: 0.001, release: 0.15 },
+          pad: { oscillatorType: 'sawtooth' as const, filterCutoff: 0.5, filterResonance: 0.1, attack: 0.4, release: 0.6 },
+          stab: { oscillatorType: 'square' as const, filterCutoff: 0.8, filterResonance: 0.4, attack: 0.001, release: 0.15 },
+          organ: { oscillatorType: 'sine' as const, filterCutoff: 0.6, filterResonance: 0.1, attack: 0.01, release: 0.1, osc2Enabled: true, osc2Type: 'sine' as const, osc2Detune: 0, osc2Volume: 0.8 },
+          bells: { oscillatorType: 'sine' as const, filterCutoff: 0.95, filterResonance: 0.3, attack: 0.001, release: 0.8 },
         };
         return { ...t, synthPreset: preset, ...defaults[preset] };
       });
@@ -599,6 +688,53 @@ export const useGrooveboxStore = create<GrooveboxState>((set, get) => ({
     set((state) => {
       const tracks = state.tracks.map((t) =>
         t.id === state.selectedTrackId ? { ...t, release: Math.max(0, Math.min(1, release)) } : t
+      );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  // Second oscillator actions
+  setOsc2Enabled: (enabled) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) =>
+        t.id === state.selectedTrackId ? { ...t, osc2Enabled: enabled } : t
+      );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  setOsc2Type: (type) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) =>
+        t.id === state.selectedTrackId ? { ...t, osc2Type: type } : t
+      );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  setOsc2Detune: (detune) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) =>
+        t.id === state.selectedTrackId ? { ...t, osc2Detune: Math.max(-100, Math.min(100, detune)) } : t
+      );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  setOsc2Volume: (volume) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) =>
+        t.id === state.selectedTrackId ? { ...t, osc2Volume: Math.max(0, Math.min(1, volume)) } : t
+      );
+      saveTracks(tracks);
+      return { tracks };
+    }),
+
+  // Legato mode
+  setLegato: (legato) =>
+    set((state) => {
+      const tracks = state.tracks.map((t) =>
+        t.id === state.selectedTrackId ? { ...t, legato } : t
       );
       saveTracks(tracks);
       return { tracks };

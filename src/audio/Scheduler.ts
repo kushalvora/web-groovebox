@@ -40,6 +40,7 @@ class Scheduler {
   // Steps per beat (4 = 16th notes in 4/4)
   private stepsPerBeat = 4;
   private currentStep = 0;
+  private patternLength = 16; // Maximum pattern length across all tracks
 
   /**
    * Set the tempo (beats per minute)
@@ -64,6 +65,17 @@ class Scheduler {
 
   getSwing(): number {
     return this.swing;
+  }
+
+  /**
+   * Set the pattern length (for global loop)
+   */
+  setPatternLength(length: number): void {
+    this.patternLength = Math.max(1, Math.min(64, length));
+  }
+
+  getPatternLength(): number {
+    return this.patternLength;
   }
 
   /**
@@ -197,7 +209,7 @@ class Scheduler {
    * Move to the next step
    */
   private advanceStep(): void {
-    this.currentStep = (this.currentStep + 1) % 16; // 16-step pattern
+    this.currentStep = (this.currentStep + 1) % this.patternLength;
     this.nextBeatTime += this.getSecondsPerStep();
 
     // Track beat number

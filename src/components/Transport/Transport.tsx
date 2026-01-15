@@ -18,31 +18,46 @@ import type { DrumType } from '../../audio/DrumSampler';
 const DRUMS: DrumType[] = ['kick', 'snare', 'hihat', 'openhat'];
 
 // Check if a track should play on this global step based on its clock divider
-const shouldTrackPlayOnStep = (globalStep: number, track: Track): { shouldPlay: boolean; trackStep: number } => {
+// NOTE: For 0.5x and 0.25x dividers, trackStep is managed via trackStepCountersRef
+// in the callback to persist across global pattern cycles
+const shouldTrackPlayOnStep = (
+  globalStep: number,
+  track: Track,
+  trackStepCounters: Map<string, number>
+): { shouldPlay: boolean; trackStep: number } => {
   const divider = track.clockDivider;
+  const trackPatternLength = track.patternLength;
 
   if (divider === 1) {
-    // Normal speed - play every step
-    return { shouldPlay: true, trackStep: globalStep };
+    // Normal speed - play every step, wrap to track's pattern length
+    return { shouldPlay: true, trackStep: globalStep % trackPatternLength };
   } else if (divider === 0.5) {
     // Half speed - play every 2nd global step
+    // Use persistent counter to cycle through all steps over 2 global pattern cycles
     if (globalStep % 2 === 0) {
-      return { shouldPlay: true, trackStep: Math.floor(globalStep / 2) };
+      const counter = trackStepCounters.get(track.id) ?? 0;
+      const trackStep = counter % trackPatternLength;
+      trackStepCounters.set(track.id, counter + 1);
+      return { shouldPlay: true, trackStep };
     }
     return { shouldPlay: false, trackStep: 0 };
   } else if (divider === 0.25) {
     // Quarter speed - play every 4th global step
+    // Use persistent counter to cycle through all steps over 4 global pattern cycles
     if (globalStep % 4 === 0) {
-      return { shouldPlay: true, trackStep: Math.floor(globalStep / 4) };
+      const counter = trackStepCounters.get(track.id) ?? 0;
+      const trackStep = counter % trackPatternLength;
+      trackStepCounters.set(track.id, counter + 1);
+      return { shouldPlay: true, trackStep };
     }
     return { shouldPlay: false, trackStep: 0 };
   } else if (divider === 2) {
     // Double speed - play twice per global step (handled differently)
     // For double speed, we play the track step and the next one
-    return { shouldPlay: true, trackStep: (globalStep * 2) % 16 };
+    return { shouldPlay: true, trackStep: (globalStep * 2) % trackPatternLength };
   }
 
-  return { shouldPlay: true, trackStep: globalStep };
+  return { shouldPlay: true, trackStep: globalStep % trackPatternLength };
 };
 
 export function Transport() {
@@ -73,10 +88,21 @@ export function Transport() {
     tracksRef.current = tracks;
   }, [tracks]);
 
-  const patternLengthRef = useRef(patternLength);
+  // Track previous step state for legato mode (per track)
+  const prevStepStateRef = useRef<Map<string, { active: boolean; note: number }>>(new Map());
+
+  // Track step counters for clock-divided tracks (persists across global pattern cycles)
+  const trackStepCountersRef = useRef<Map<string, number>>(new Map());
+
+  // Calculate max pattern length from all tracks
+  const maxPatternLength = Math.max(...tracks.map((t) => t.patternLength), 16);
+
+  const patternLengthRef = useRef(maxPatternLength);
   useEffect(() => {
-    patternLengthRef.current = patternLength;
-  }, [patternLength]);
+    patternLengthRef.current = maxPatternLength;
+    // Sync scheduler with max pattern length
+    scheduler.setPatternLength(maxPatternLength);
+  }, [maxPatternLength]);
 
   const metronomeEnabledRef = useRef(metronomeEnabled);
   useEffect(() => {
@@ -123,11 +149,15 @@ export function Transport() {
         if (isMuted) continue;
 
         // Check clock divider to see if this track should play
-        const { shouldPlay, trackStep } = shouldTrackPlayOnStep(globalStep, track);
+        const { shouldPlay, trackStep } = shouldTrackPlayOnStep(
+          globalStep,
+          track,
+          trackStepCountersRef.current
+        );
         if (!shouldPlay) continue;
 
-        // Ensure trackStep is within pattern bounds
-        const actualStep = trackStep % patternLengthRef.current;
+        // trackStep is already within bounds from shouldTrackPlayOnStep
+        const actualStep = trackStep;
 
         // Get track's output node for proper routing
         const trackOutput = audioEngine.getTrackOutput(track.id);
@@ -143,26 +173,70 @@ export function Transport() {
         } else if (track.type === 'tone') {
           // Play synth for this step
           const stepData = track.synthPattern?.[actualStep];
-          if (stepData?.active) {
-            synthesizer.play(
-              stepData.note,
-              time,
-              stepData.velocity,
-              {
-                oscillatorType: track.oscillatorType,
-                filterCutoff: track.filterCutoff,
-                filterResonance: track.filterResonance,
-                attack: track.attack,
-                release: track.release,
-              },
-              trackOutput
-            );
+          const prevState = prevStepStateRef.current.get(track.id);
+
+          // Synth params including osc2
+          const synthParams = {
+            oscillatorType: track.oscillatorType,
+            filterCutoff: track.filterCutoff,
+            filterResonance: track.filterResonance,
+            attack: track.attack,
+            release: track.release,
+            osc2Enabled: track.osc2Enabled,
+            osc2Type: track.osc2Type,
+            osc2Detune: track.osc2Detune,
+            osc2Volume: track.osc2Volume,
+          };
+
+          if (track.legato) {
+            // Legato mode: tie consecutive notes
+            const isActive = stepData?.active ?? false;
+            const currentNote = stepData?.note ?? 60;
+            const wasActive = prevState?.active ?? false;
+            const prevNote = prevState?.note ?? 60;
+
+            // Start new note if: step is active AND (previous wasn't active OR note changed)
+            if (isActive && (!wasActive || currentNote !== prevNote)) {
+              // Release any existing note first
+              if (wasActive) {
+                synthesizer.releaseNote(track.id, time);
+              }
+              // Start new legato note
+              synthesizer.playLegato(
+                currentNote,
+                time,
+                stepData?.velocity ?? 0.8,
+                synthParams,
+                trackOutput,
+                track.id
+              );
+            }
+            // Release note if: previous was active AND current is not active
+            else if (wasActive && !isActive) {
+              synthesizer.releaseNote(track.id, time);
+            }
+            // If both active with same note, do nothing (note continues)
+
+            // Update previous state
+            prevStepStateRef.current.set(track.id, { active: isActive, note: currentNote });
+          } else {
+            // Normal trigger mode: play each active step
+            if (stepData?.active) {
+              synthesizer.play(
+                stepData.note,
+                time,
+                stepData.velocity,
+                synthParams,
+                trackOutput,
+                track.id
+              );
+            }
           }
         }
 
         // For double speed (2x), also play the next step
         if (track.clockDivider === 2) {
-          const nextStep = (trackStep + 1) % patternLengthRef.current;
+          const nextStep = (trackStep + 1) % track.patternLength;
           const halfStepDuration = (60 / scheduler.getBpm()) / 8; // Half a 16th note
 
           if (track.type === 'drum') {
@@ -172,7 +246,8 @@ export function Transport() {
                 drumSampler.play(drum, time + halfStepDuration, stepData.velocity, trackOutput);
               }
             }
-          } else if (track.type === 'tone') {
+          } else if (track.type === 'tone' && !track.legato) {
+            // Only do 2x for non-legato synth tracks
             const stepData = track.synthPattern?.[nextStep];
             if (stepData?.active) {
               synthesizer.play(
@@ -185,8 +260,13 @@ export function Transport() {
                   filterResonance: track.filterResonance,
                   attack: track.attack,
                   release: track.release,
+                  osc2Enabled: track.osc2Enabled,
+                  osc2Type: track.osc2Type,
+                  osc2Detune: track.osc2Detune,
+                  osc2Volume: track.osc2Volume,
                 },
-                trackOutput
+                trackOutput,
+                track.id
               );
             }
           }
@@ -219,6 +299,10 @@ export function Transport() {
       scheduler.stop();
       setIsPlaying(false);
       setCurrentStep(0);
+      // Clear legato state
+      prevStepStateRef.current.clear();
+      // Clear clock divider step counters
+      trackStepCountersRef.current.clear();
     } else {
       scheduler.start();
       setIsPlaying(true);

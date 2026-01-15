@@ -1,6 +1,7 @@
 import { Transport } from './components/Transport';
 import { Mixer } from './components/Mixer';
 import { StepSequencer } from './components/Sequencer';
+import { SynthControls } from './components/SynthControls';
 
 function App() {
   return (
@@ -20,6 +21,9 @@ function App() {
 
         {/* Step Sequencer */}
         <StepSequencer />
+
+        {/* Synth Controls (conditional - only shows for tone tracks) */}
+        <SynthControls />
 
         {/* Learning Note */}
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-4 text-sm text-zinc-400">

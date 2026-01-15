@@ -144,6 +144,30 @@ class AudioEngine {
       this.trackNodes.delete(trackId);
     }
   }
+
+  /**
+   * Decode an audio file (File or Blob) into an AudioBuffer
+   * Supports WAV, MP3, OGG, and other formats the browser can decode
+   */
+  async decodeAudioFile(file: File | Blob): Promise<AudioBuffer> {
+    if (!this.context) {
+      throw new Error('AudioEngine not initialized. Call init() first.');
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    return await this.context.decodeAudioData(arrayBuffer);
+  }
+
+  /**
+   * Decode audio from a URL
+   */
+  async decodeAudioUrl(url: string): Promise<AudioBuffer> {
+    if (!this.context) {
+      throw new Error('AudioEngine not initialized. Call init() first.');
+    }
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    return await this.context.decodeAudioData(arrayBuffer);
+  }
 }
 
 // Singleton instance

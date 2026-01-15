@@ -1,9 +1,12 @@
 /**
- * DrumSampler - Synthesized drum sounds
+ * DrumSampler - Hybrid drum sounds (samples + synthesis)
  *
- * Creates classic 808/909-style drum sounds using Web Audio synthesis.
+ * Can play either:
+ * 1. User-loaded audio samples (WAV/MP3)
+ * 2. Classic 808/909-style synthesized drums (fallback)
+ *
  * This teaches you how electronic drums are actually made - oscillators,
- * noise, and envelopes, not just playing back recordings.
+ * noise, and envelopes, plus how samplers work with audio files.
  */
 
 import { audioEngine } from './AudioEngine';
@@ -18,8 +21,39 @@ export const DRUM_NAMES: Record<DrumType, string> = {
 };
 
 class DrumSampler {
+  // Loaded audio samples per drum type
+  private samples: Map<DrumType, AudioBuffer> = new Map();
+
+  /**
+   * Load an audio sample for a drum type
+   */
+  setSample(type: DrumType, buffer: AudioBuffer): void {
+    this.samples.set(type, buffer);
+  }
+
+  /**
+   * Clear a loaded sample (revert to synthesis)
+   */
+  clearSample(type: DrumType): void {
+    this.samples.delete(type);
+  }
+
+  /**
+   * Check if a sample is loaded for a drum type
+   */
+  hasSample(type: DrumType): boolean {
+    return this.samples.has(type);
+  }
+
+  /**
+   * Get all loaded samples info
+   */
+  getLoadedSamples(): DrumType[] {
+    return Array.from(this.samples.keys());
+  }
   /**
    * Play a drum sound at a specific time
+   * Uses loaded sample if available, otherwise falls back to synthesis
    * @param type - Which drum to play
    * @param time - When to play (Web Audio time)
    * @param velocity - How loud (0-1)
@@ -35,6 +69,14 @@ class DrumSampler {
     const output = destination ?? audioEngine.getMasterGain();
     const vel = Math.max(0, Math.min(1, velocity));
 
+    // Check if we have a sample loaded for this drum
+    const sample = this.samples.get(type);
+    if (sample) {
+      this.playSample(ctx, output, time, vel, sample);
+      return;
+    }
+
+    // Fall back to synthesis
     switch (type) {
       case 'kick':
         this.playKick(ctx, output, time, vel);
@@ -49,6 +91,28 @@ class DrumSampler {
         this.playHihat(ctx, output, time, vel, true);
         break;
     }
+  }
+
+  /**
+   * Play an audio buffer sample
+   */
+  private playSample(
+    ctx: AudioContext,
+    destination: AudioNode,
+    time: number,
+    velocity: number,
+    buffer: AudioBuffer
+  ): void {
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(velocity, time);
+
+    source.connect(gain);
+    gain.connect(destination);
+
+    source.start(time);
   }
 
   /**

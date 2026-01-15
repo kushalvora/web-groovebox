@@ -6,11 +6,15 @@
  * - For synth tracks: Single row with note selection
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { useGrooveboxStore, getPatternPresets } from '../../store/useGrooveboxStore';
-import { DRUM_NAMES } from '../../audio/DrumSampler';
+import type { PatternLength } from '../../store/useGrooveboxStore';
+import { DRUM_NAMES, drumSampler } from '../../audio/DrumSampler';
+import { audioEngine } from '../../audio/AudioEngine';
 import { midiToNoteName } from '../../audio/Synthesizer';
 import type { DrumType } from '../../audio/DrumSampler';
+
+const PATTERN_LENGTH_OPTIONS: PatternLength[] = [8, 16, 32, 64];
 
 const DRUM_ORDER: DrumType[] = ['kick', 'snare', 'hihat', 'openhat'];
 
@@ -29,7 +33,6 @@ export function StepSequencer() {
     setSynthStepNote,
     currentStep,
     isPlaying,
-    patternLength,
     loadPreset,
     clearPattern,
     userPatterns,
@@ -37,6 +40,7 @@ export function StepSequencer() {
     deleteUserPattern,
     tracks,
     selectedTrackId,
+    setTrackPatternLength,
   } = useGrooveboxStore();
 
   // Get the currently selected track and its patterns
@@ -49,11 +53,44 @@ export function StepSequencer() {
   };
   const synthPattern = selectedTrack?.synthPattern ?? [];
   const isSynthTrack = selectedTrack?.type === 'tone';
+  const trackPatternLength = selectedTrack?.patternLength ?? 16;
 
   const [patternName, setPatternName] = useState('');
   const [showSaveInput, setShowSaveInput] = useState(false);
+  // Track which drums have samples loaded (for UI update)
+  const [loadedSamples, setLoadedSamples] = useState<DrumType[]>(drumSampler.getLoadedSamples());
+  // File input refs for each drum type
+  const fileInputRefs = useRef<Record<DrumType, HTMLInputElement | null>>({
+    kick: null,
+    snare: null,
+    hihat: null,
+    openhat: null,
+  });
 
   const allPresets = getPatternPresets(userPatterns);
+
+  // Handle sample file loading
+  const handleSampleLoad = useCallback(async (drum: DrumType, file: File | null) => {
+    if (!file) return;
+    try {
+      const buffer = await audioEngine.decodeAudioFile(file);
+      drumSampler.setSample(drum, buffer);
+      setLoadedSamples(drumSampler.getLoadedSamples());
+    } catch (error) {
+      console.error(`Failed to load sample for ${drum}:`, error);
+      alert(`Failed to load audio file. Make sure it's a valid audio format (WAV, MP3, etc.)`);
+    }
+  }, []);
+
+  // Clear a loaded sample
+  const handleClearSample = useCallback((drum: DrumType) => {
+    drumSampler.clearSample(drum);
+    setLoadedSamples(drumSampler.getLoadedSamples());
+    // Clear file input
+    if (fileInputRefs.current[drum]) {
+      fileInputRefs.current[drum]!.value = '';
+    }
+  }, []);
 
   const handleStepClick = useCallback(
     (drum: DrumType, step: number) => {
@@ -92,6 +129,15 @@ export function StepSequencer() {
     [handleSave]
   );
 
+  const handlePatternLengthChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      if (selectedTrackId) {
+        setTrackPatternLength(selectedTrackId, parseInt(e.target.value, 10) as PatternLength);
+      }
+    },
+    [selectedTrackId, setTrackPatternLength]
+  );
+
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 w-full">
       {/* Header with presets and save */}
@@ -107,6 +153,22 @@ export function StepSequencer() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Pattern length selector */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-zinc-500">Steps:</span>
+            <select
+              value={trackPatternLength}
+              onChange={handlePatternLengthChange}
+              className="bg-zinc-800 text-white text-sm rounded px-2 py-1 border border-zinc-700"
+            >
+              {PATTERN_LENGTH_OPTIONS.map((len) => (
+                <option key={len} value={len}>
+                  {len}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Preset dropdown */}
           <select
             onChange={handlePresetChange}
@@ -209,33 +271,62 @@ export function StepSequencer() {
         </div>
       )}
 
-      {/* Beat markers */}
-      <div className="flex mb-1 ml-20">
-        {Array.from({ length: patternLength }, (_, i) => (
-          <div
-            key={i}
-            className={`w-8 h-4 flex items-center justify-center text-xs ${
-              i % 4 === 0 ? 'text-zinc-400' : 'text-zinc-600'
-            }`}
-          >
-            {i % 4 === 0 ? Math.floor(i / 4) + 1 : ''}
-          </div>
-        ))}
-      </div>
+      {/* Scrollable container for longer patterns */}
+      <div className="overflow-x-auto">
+        {/* Beat markers */}
+        <div className="flex mb-1 ml-20">
+          {Array.from({ length: trackPatternLength }, (_, i) => (
+            <div
+              key={i}
+              className={`w-8 h-4 flex-shrink-0 flex items-center justify-center text-xs ${
+                i % 4 === 0 ? 'text-zinc-400' : 'text-zinc-600'
+              }`}
+            >
+              {i % 4 === 0 ? Math.floor(i / 4) + 1 : ''}
+            </div>
+          ))}
+        </div>
 
-      {/* Drum Sequencer Grid */}
-      {!isSynthTrack && (
-        <div className="space-y-1">
+        {/* Drum Sequencer Grid */}
+        {!isSynthTrack && (
+          <div className="space-y-1">
           {DRUM_ORDER.map((drum) => (
             <div key={drum} className="flex items-center gap-2">
-              {/* Drum label */}
-              <div className="w-16 text-right text-sm text-zinc-400 pr-2">
-                {DRUM_NAMES[drum]}
+              {/* Drum label with sample controls */}
+              <div className="w-16 flex items-center justify-end gap-1 pr-1">
+                {/* Hidden file input */}
+                <input
+                  type="file"
+                  accept="audio/*"
+                  ref={(el) => { fileInputRefs.current[drum] = el; }}
+                  onChange={(e) => handleSampleLoad(drum, e.target.files?.[0] ?? null)}
+                  className="hidden"
+                  id={`sample-input-${drum}`}
+                />
+                {/* Sample load/clear button */}
+                {loadedSamples.includes(drum) ? (
+                  <button
+                    onClick={() => handleClearSample(drum)}
+                    className="text-[10px] px-1 py-0.5 bg-green-600 hover:bg-red-600 text-white rounded"
+                    title="Clear sample (use synth)"
+                  >
+                    S
+                  </button>
+                ) : (
+                  <label
+                    htmlFor={`sample-input-${drum}`}
+                    className="text-[10px] px-1 py-0.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-400 rounded cursor-pointer"
+                    title="Load sample"
+                  >
+                    +
+                  </label>
+                )}
+                <span className="text-sm text-zinc-400">{DRUM_NAMES[drum]}</span>
               </div>
 
               {/* Steps */}
               <div className="flex gap-0.5">
-                {patterns[drum].slice(0, patternLength).map((step, i) => {
+                {patterns[drum].slice(0, trackPatternLength).map((step, i) => {
                   const isCurrentStep = isPlaying && i === currentStep;
                   const colors = DRUM_COLORS[drum];
 
@@ -258,11 +349,11 @@ export function StepSequencer() {
               </div>
             </div>
           ))}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Synth Sequencer Grid */}
-      {isSynthTrack && (
+        {/* Synth Sequencer Grid */}
+        {isSynthTrack && (
         <div className="space-y-2">
           {/* Notes row */}
           <div className="flex items-center gap-2">
@@ -270,7 +361,7 @@ export function StepSequencer() {
               Notes
             </div>
             <div className="flex gap-0.5">
-              {synthPattern.slice(0, patternLength).map((step, i) => {
+              {synthPattern.slice(0, trackPatternLength).map((step, i) => {
                 const isCurrentStep = isPlaying && i === currentStep;
 
                 return (
@@ -304,7 +395,7 @@ export function StepSequencer() {
               Pitch
             </div>
             <div className="flex gap-0.5">
-              {synthPattern.slice(0, patternLength).map((step, i) => (
+              {synthPattern.slice(0, trackPatternLength).map((step, i) => (
                 <div
                   key={i}
                   className={`w-8 flex flex-col gap-0.5 ${i % 4 === 0 ? 'ml-0.5' : ''}`}
@@ -363,7 +454,8 @@ export function StepSequencer() {
             </div>
           </div>
         </div>
-      )}
+        )}
+      </div>
 
       {/* Legend */}
       <div className="mt-4 flex items-center gap-4 text-xs text-zinc-500">
