@@ -247,7 +247,6 @@ class Synthesizer {
     const voice = this.activeVoices.get(trackId);
     if (!voice) return;
 
-    const ctx = audioEngine.getContext();
     const releaseTime = this.mapRelease(voice.releaseTime);
 
     // Cancel any scheduled values and start release

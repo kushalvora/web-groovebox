@@ -72,7 +72,6 @@ export function Transport() {
     setSwing,
     setCurrentStep,
     tracks,
-    patternLength,
     metronomeEnabled,
     setMetronomeEnabled,
     tapTimes,
